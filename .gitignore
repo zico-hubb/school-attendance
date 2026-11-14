@@ -1,0 +1,53 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+backend/.env
+dashboard/.env
+dashboard/.env.*
+!dashboard/.env.example
+mobile/.env
+mobile/.env.*
+!mobile/.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+**/node_modules/
+dist/
+coverage/
+npm-debug.log*
+
+# Native build outputs (keep generated project source when added)
+mobile/android/.gradle/
+mobile/android/local.properties
+mobile/android/**/build/
+mobile/android/**/*.jks
+mobile/android/**/*.keystore
+mobile/android/**/keystore.properties
+mobile/ios/build/
+mobile/ios/Pods/
+mobile/ios/DerivedData/
+mobile/ios/**/*.mobileprovision
+mobile/ios/**/*.p12
+mobile/ios/**/*.cer
+mobile/ios/**/*.p8
+mobile/ios/**/*.key
+mobile/ios/*.xcworkspace/xcuserdata/
+mobile/ios/*.xcodeproj/xcuserdata/
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

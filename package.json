@@ -1,0 +1,20 @@
+{
+  "name": "school-attendance",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "dashboard",
+    "mobile"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n dashboard,mobile -c blue,green \"npm:dev:dashboard\" \"npm:dev:mobile\"",
+    "dev:dashboard": "npm run dev --workspace @school-attendance/dashboard",
+    "dev:mobile": "npm run dev --workspace @school-attendance/mobile",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
