@@ -111,6 +111,26 @@ The test settings use PostgreSQL, with Django's isolated
 `school_attendance` development database. Normal development and production use
 PostgreSQL.
 
+## Administration authentication
+
+The dashboard uses `POST /api/v1/auth/login/`, `POST /api/v1/auth/refresh/`,
+and `POST /api/v1/auth/logout/`. Access tokens remain in memory, while the
+refresh credential and backend-issued identity are held in `sessionStorage`;
+refresh state survives a normal page refresh but not closing the browser
+session. Session storage is not an HttpOnly secure cookie and must not be
+presented as equivalent cookie security.
+
+The login page accepts a school code, username, and password. Only
+`SCHOOL_ADMIN` and `ATTENDANCE_MANAGER` identities are admitted to the web
+shell. `STAFF` identities are rejected and directed to the mobile application.
+Navigation is role-aware, but every backend endpoint remains authoritative.
+
+Set `VITE_API_BASE_URL` in `dashboard/.env`; it defaults to
+`http://127.0.0.1:8000/api/v1` for local development. Staff directory operations
+use the school-scoped `/api/v1/staff/` endpoints. Logout clears local state even
+when the logout request cannot reach the backend; a failed refresh also clears
+the local session.
+
 ## Limitations
 
 - The versioned API has health, authentication, and school-admin staff identity
