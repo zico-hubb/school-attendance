@@ -22,6 +22,39 @@ configuration. Public registration, attendance verification and
 classification, native integrations, and dashboard/mobile workflows are not
 implemented. No Azure resources or deployment configuration are provisioned.
 
+## Platform school provisioning
+
+An authorized platform operator provisions a school and its first
+`SCHOOL_ADMIN` from the backend directory with:
+
+```powershell
+.\.venv\Scripts\python.exe manage.py provision_school
+```
+
+The command prompts for the school name, unique school code, administrator
+username, and password twice. Password entry is hidden. Existing school
+validation, username normalization/model validation, Django password
+validators, and the existing user manager are used. The school, administrator,
+and `SCHOOL_PROVISIONED` audit entry are created in one transaction. Duplicate
+school codes or usernames are rejected; a failure creating either the
+administrator or audit entry rolls back the new school.
+
+This is an operator-only management command, not a public registration API or
+dashboard feature. Access is controlled by authorization to run Django
+management commands in the deployment environment; there is no platform
+operator role, identity, or approval workflow in the application. The
+school-scoped audit log records provisioning with a null actor, so it does not
+identify which operator ran it. Operators must use their environment's access
+controls and audit trail for operator attribution.
+
+Deliver the initial password to the administrator only through an approved,
+secure out-of-band channel. Do not put it in command arguments, shell history,
+logs, tickets, or chat. The administrator signs in through the existing
+`/api/v1/auth/login/` endpoint using the provisioned school code, username, and
+password. The application currently has no forced password-change or
+self-service password-reset workflow, so the operator and administrator must
+follow the deployment's credential-rotation procedure after handoff.
+
 ## School location and network configuration
 
 The `locations` app's existing attendance-zone and approved-access-point
