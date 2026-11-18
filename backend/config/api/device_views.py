@@ -4,11 +4,10 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.exceptions import PermissionDenied
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.permissions import IsSchoolAdmin
+from accounts.permissions import IsAuthenticated, IsSchoolAdmin
 from accounts.tokens import create_session
 from audit.models import AuditLog
 from devices.models import (
@@ -144,10 +143,9 @@ class EnrollmentChallengeView(APIView):
                 "challenge": challenge_value,
                 "expires_at": challenge.expires_at.isoformat(),
                 "algorithm": SIGNATURE_ALGORITHM,
-                "signature_message": (
-                    "school-attendance:device-enrollment:v1\n"
-                    "<challenge>\n<user_uuid>\n<school_uuid>"
-                ),
+                "signature_message": enrollment_message(
+                    challenge_value, request.user, request.user.school
+                ).decode("utf-8"),
                 "staff_id": str(profile.pk),
                 "school_id": str(request.user.school_id),
             },
@@ -294,10 +292,9 @@ class DeviceAuthenticationChallengeView(APIView):
                 "device_id": str(device.pk),
                 "expires_at": challenge.expires_at.isoformat(),
                 "algorithm": SIGNATURE_ALGORITHM,
-                "signature_message": (
-                    "school-attendance:device-authentication:v1\n"
-                    "<challenge>\n<user_uuid>\n<school_uuid>\n<device_uuid>"
-                ),
+                "signature_message": device_authentication_message(
+                    challenge_value, request.user, device
+                ).decode("utf-8"),
                 "school_id": str(request.user.school_id),
             },
             status=status.HTTP_201_CREATED,

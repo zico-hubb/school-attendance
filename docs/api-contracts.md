@@ -40,6 +40,7 @@ Success (`200`):
   "expires_in": 900,
   "refresh_expires_at": "<ISO-8601 timestamp>",
   "device_status": "NOT_ENROLLED",
+  "password_change_required": true,
   "session_status": "BOOTSTRAP",
   "user": {
     "id": "<user-uuid>",
@@ -65,6 +66,37 @@ session. Non-staff accounts use `device_status: NOT_APPLICABLE` and retain
 account-bound sessions. Inactive accounts return `403` with
 `{"state":"ACCOUNT_INACTIVE","detail":"The account is inactive."}` only after
 the submitted password is verified.
+
+Staff accounts created or reset by a school administrator use a temporary
+password and return `password_change_required: true`. Until it is changed,
+authenticated endpoints other than password change and logout are denied, and
+refresh is rejected.
+
+### Password change and temporary-password reset
+
+`POST /api/v1/auth/password/change/` requires the current bearer token and
+accepts:
+
+```json
+{
+  "current_password": "<current-password>",
+  "new_password": "<new-password>",
+  "new_password_confirm": "<new-password>"
+}
+```
+
+The new password is checked with Django's configured validators. A successful
+change clears the forced-change flag, preserves the current session, revokes
+other sessions, and writes an audit event. The account must use its current
+password; an expired, revoked, or inactive session cannot change credentials.
+
+There is no self-service email recovery because the application has no
+verified-email or password-delivery service. A school administrator can reset
+a staff member by including `temporary_password` in
+`PATCH /api/v1/staff/<staff-uuid>/`. This revokes the staff member's sessions
+and requires a password change at next login. The value is write-only and is
+never returned or logged; the administrator must deliver it privately through
+an approved out-of-band channel.
 
 `POST /api/v1/auth/refresh/` accepts
 `{"refresh_token":"<opaque-refresh-token>"}` and returns a rotated token pair
@@ -301,19 +333,112 @@ always creates the application role `STAFF`; `school`, `school_id`, role, and
 validators and stored using Django's password hashing. The response includes
 the user and profile IDs but never returns the password.
 
+The submitted `password` is an initial temporary password. New staff accounts
+must change it before using any authenticated endpoint other than password
+change or logout. A temporary password can also be reset through the staff
+`PATCH` request described in Authentication above.
+
 The `201` response contains the profile ID, linked `user_id`, username, role,
 active state, employee number, name, department, job title, employment status,
 and employment dates. It does not expose a school ID.
 
 `PATCH` permits `email`, `phone`, `is_active`, `employee_number`, `first_name`,
-`last_name`, `department`, `job_title`, `employment_status`, `date_joined`, and
-`date_left`. Setting `is_active` to `false` deactivates the account without
+`last_name`, `department`, `job_title`, `employment_status`, `date_joined`,
+`date_left`, and `temporary_password`. Setting `is_active` to `false` deactivates the account without
 deleting its user, profile, or related history. Client-supplied school and
 unknown fields are rejected.
 
 All profile querysets are scoped to the authenticated administrator's school.
 Requests for another school's profile return `404`, including attempts using a
 foreign profile UUID. User IDs do not authorize or change the tenant scope.
+
+## Department management
+
+Departments belong to the authenticated user's school. School administrators
+may list, create, retrieve, update, and activate/deactivate departments.
+Attendance managers may list and retrieve only. Staff cannot access department
+endpoints. A department is deactivated rather than deleted.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/departments/` | List departments for the caller's school |
+| `POST` | `/api/v1/departments/` | Create a department |
+| `GET` | `/api/v1/departments/<department-uuid>/` | Retrieve a department |
+| `PATCH` | `/api/v1/departments/<department-uuid>/` | Update name/description or active status |
+
+Create accepts `name` and optional `description`; patch accepts any subset of
+`name`, `description`, and `is_active`. Names are unique within a school.
+School ownership is derived from the authenticated administrator; client
+school fields are rejected. Foreign-school IDs return `404`. Mutations and
+their audit entries are atomic.
+
+## Scheduling and school calendar
+
+These authenticated, school-scoped APIs are read-only for
+`ATTENDANCE_MANAGER`; only `SCHOOL_ADMIN` can mutate configuration. Staff
+cannot access schedule or calendar configuration.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET`, `POST` | `/api/v1/schedules/` | List schedules with versions/days; create a schedule and its first active version |
+| `GET`, `PATCH` | `/api/v1/schedules/<schedule-uuid>/` | Retrieve or update schedule name, description, or active status |
+| `POST` | `/api/v1/schedules/<schedule-uuid>/versions/` | Add a complete effective-dated version |
+| `GET`, `POST` | `/api/v1/schedule-assignments/` | List or assign a schedule to a school, department, or staff member |
+| `PATCH` | `/api/v1/schedule-assignments/<assignment-uuid>/` | Set the assignment end date |
+| `GET`, `POST` | `/api/v1/schedule-exceptions/` | List or create a staff/date-specific exception |
+| `PATCH` | `/api/v1/schedule-exceptions/<exception-uuid>/` | Update a staff/date-specific exception |
+| `GET`, `POST` | `/api/v1/calendar-events/` | List or create a school/department calendar event |
+| `PATCH` | `/api/v1/calendar-events/<event-uuid>/` | Update a calendar event |
+
+A schedule create request has `name`, optional `description`, `effective_from`,
+optional `effective_to`, and exactly seven `days`, one for each weekday
+(`0` Monday through `6` Sunday). A working day requires `start_time`,
+`end_time`, `late_after`, and `absence_finalization_time`; non-working days
+must omit/null those times. Every version is activated only after all seven
+days have been saved. Creating a later version closes a preceding open-ended
+version on the previous day. Version ranges for the same schedule cannot
+overlap.
+
+Assignment creation accepts `work_schedule`, `effective_from`,
+optional `effective_to`, and one of `is_school_default: true`,
+`department: <uuid>`, or `staff_profile: <uuid>`. The server derives school
+and assigner. Effective assignments cannot overlap within their target scope.
+Resolution precedence is date exception, applicable calendar event, staff
+assignment, department assignment, then school default. Holiday/closure events
+mark dates non-working. An `EXCEPTIONAL_WORKING_DAY` requires explicit
+`start_time`, `end_time`, `late_after`, and `absence_finalization_time`;
+department events take precedence over school-wide events. Calendar date
+ranges cannot overlap within the same scope.
+
+Date exceptions accept `staff_profile`, `exception_date`, `is_working_day`,
+optional time overrides, and optional `reason`. A working exception inherits
+unspecified times from the resolved schedule; a non-working exception cannot
+define times. Assignments are ended by updating `effective_to`; schedule,
+exception, and calendar records have no delete endpoint.
+
+## Leave management
+
+Authenticated school administrators can manage leave types, review pending
+requests, and cancel pending or approved requests. Attendance managers have
+read-only access. Staff can read active leave types and their own leave
+records, submit requests, and cancel only their own pending requests.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET`, `POST` | `/api/v1/leave-types/` | Read leave types; admins create types |
+| `PATCH` | `/api/v1/leave-types/<leave-type-uuid>/` | Admin updates leave type or active status |
+| `GET`, `POST` | `/api/v1/leave-records/` | List permitted records; staff submit their own requests |
+| `POST` | `/api/v1/leave-records/<leave-uuid>/review/` | Admin approves or rejects a pending request |
+| `POST` | `/api/v1/leave-records/<leave-uuid>/cancel/` | Requester/admin cancels an eligible request |
+
+Leave applications accept `leave_type`, `start_date`, `end_date`, and optional
+`reason`; the staff profile and school are derived from the caller. Review
+accepts `status` (`APPROVED` or `REJECTED`) and optional `review_comment`.
+Cancellation requires `cancellation_reason`. Approved leave periods for one
+staff member cannot overlap. Review and cancellation actor, timestamp, comment,
+and reason are retained on the record and in an atomic audit entry. The
+dashboard supports leave-type management and administrator review; a staff
+mobile application for submissions is not yet implemented.
 
 ## School location and network configuration
 
@@ -400,13 +525,12 @@ or attendance.
 - `400`: invalid or incomplete request data.
 - `401`: missing, invalid, expired, or revoked authentication credentials.
 - `403`: authenticated user lacks the role required for the requested operation.
-- `404`: requested staff profile or location/network configuration is not
+- `404`: requested staff profile, department, or location/network configuration is not
   present in the caller's school.
 - `405`: unsupported method, including staff deletion.
 
 The account roles are `SCHOOL_ADMIN`, `ATTENDANCE_MANAGER`, and `STAFF`.
-This milestone only grants staff identity-management operations to
-`SCHOOL_ADMIN`. It does not implement attendance APIs or grant an administrator
-attendance privileges for another employee. An administrator with a staff
-profile receives no attendance-verification bypass; attendance verification is
-not part of this milestone.
+Staff identity-management operations require `SCHOOL_ADMIN`; attendance
+managers have read-only department access. Attendance APIs are not implemented
+and administrators cannot bypass attendance verification for their own staff
+profiles.

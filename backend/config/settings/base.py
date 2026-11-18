@@ -71,6 +71,12 @@ ATTENDANCE_ZONE_RADIUS_DB_LIMIT_METERS = 10_000
 MAX_ATTENDANCE_ZONE_RADIUS_METERS = int(
     os.getenv("MAX_ATTENDANCE_ZONE_RADIUS_METERS", "5000")
 )
+ATTENDANCE_LOCATION_MAX_ACCURACY_METERS = float(
+    os.getenv("ATTENDANCE_LOCATION_MAX_ACCURACY_METERS", "100")
+)
+ATTENDANCE_LOCATION_MAX_AGE_SECONDS = int(
+    os.getenv("ATTENDANCE_LOCATION_MAX_AGE_SECONDS", "300")
+)
 if not 1 <= MAX_ATTENDANCE_ZONE_RADIUS_METERS <= ATTENDANCE_ZONE_RADIUS_DB_LIMIT_METERS:
     raise ValueError(
         "MAX_ATTENDANCE_ZONE_RADIUS_METERS must be between 1 and "
@@ -111,7 +117,7 @@ REST_FRAMEWORK = {
         "accounts.authentication.AccessTokenAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
-        "rest_framework.permissions.IsAuthenticated",
+        "accounts.permissions.IsAuthenticated",
     ],
     "DEFAULT_VERSIONING_CLASS": "rest_framework.versioning.URLPathVersioning",
     "DEFAULT_VERSION": "1",

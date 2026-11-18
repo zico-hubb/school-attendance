@@ -4,8 +4,11 @@ PostgreSQL is the configured development and production database. The local
 development environment has been verified on PostgreSQL 18 using the
 `school_attendance` database and the dedicated `school_attendance_user` role at
 `127.0.0.1:5432`. Connection values are loaded from the ignored `backend/.env`;
-the example file contains placeholders only. The V1 migrations were applied
-normally to the newly created, empty development database.
+the example file contains placeholders only. The initial V1 migrations were
+applied normally to the newly created, empty development database. Additive
+migrations for temporary-password state, school-default assignments,
+date-exception/calendar times, and leave transition metadata have since been
+generated but were not applied to that database during implementation.
 
 ## App boundaries
 
@@ -28,8 +31,9 @@ deactivation and revocation are represented by status fields and timestamps.
 Database constraints enforce scoped uniqueness, idempotency, accepted-event
 uniqueness, valid weekday ranges, and other local invariants. Cross-row date-range
 overlap rules for schedule versions, schedule assignments, and approved leave are
-validated transactionally in application code with target-row locking; they are not
-PostgreSQL exclusion constraints.
+validated transactionally in application code with target-row locking; calendar
+events also reject overlapping ranges within a school or department scope. These
+are not PostgreSQL exclusion constraints.
 
 The custom `accounts.User` model is configured before the initial migrations.
 Usernames are normalized and unique within a school, and the custom backend requires

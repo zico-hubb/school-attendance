@@ -21,6 +21,7 @@ class User(AbstractBaseUser, PermissionsMixin, UUIDModel):
     phone = models.CharField(max_length=32, blank=True)
     role = models.CharField(max_length=24, choices=Role.choices, default=Role.STAFF)
     is_active = models.BooleanField(default=True)
+    must_change_password = models.BooleanField(default=False)
     is_staff = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

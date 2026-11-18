@@ -103,6 +103,7 @@ def rotate_refresh_token(token):
             user_session.revoked_at is not None
             or user_session.expires_at <= now
             or not user_session.user.is_active
+            or user_session.user.must_change_password
             or user_session.refresh_token_hash != token_hash
             or not device_session_is_usable(user_session)
         ):

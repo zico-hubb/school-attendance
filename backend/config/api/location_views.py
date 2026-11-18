@@ -5,11 +5,14 @@ from django.core.serializers.json import DjangoJSONEncoder
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import serializers, status
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.permissions import IsSchoolAdmin, IsSchoolAdminOrAttendanceManager
+from accounts.permissions import (
+    IsAuthenticated,
+    IsSchoolAdmin,
+    IsSchoolAdminOrAttendanceManager,
+)
 from audit.models import AuditLog
 from locations.models import ApprovedAccessPoint, AttendanceZone
 from locations.serializers import (

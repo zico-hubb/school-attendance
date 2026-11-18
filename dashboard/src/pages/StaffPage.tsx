@@ -1,5 +1,13 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { createStaff, getStaff, getStaffMember, updateStaff, type StaffMember } from '../services/api'
+import {
+  createStaff,
+  getDepartments,
+  getStaff,
+  getStaffMember,
+  updateStaff,
+  type Department,
+  type StaffMember,
+} from '../services/api'
 
 const emptyCreate = {
   first_name: '',
@@ -16,6 +24,7 @@ const emptyCreate = {
 
 export function StaffPage() {
   const [staff, setStaff] = useState<StaffMember[]>([])
+  const [departments, setDepartments] = useState<Department[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
@@ -27,12 +36,21 @@ export function StaffPage() {
   const [saving, setSaving] = useState(false)
   const [selected, setSelected] = useState<StaffMember | null>(null)
   const [detailError, setDetailError] = useState('')
+  const [departmentDraft, setDepartmentDraft] = useState('')
+  const [temporaryPassword, setTemporaryPassword] = useState('')
+  const [passwordResetSuccess, setPasswordResetSuccess] = useState('')
+  const [savingPasswordReset, setSavingPasswordReset] = useState(false)
 
   const load = async () => {
     setLoading(true)
     setError('')
     try {
-      setStaff(await getStaff())
+      const [staffRows, departmentRows] = await Promise.all([
+        getStaff(),
+        getDepartments(),
+      ])
+      setStaff(staffRows)
+      setDepartments(departmentRows)
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Unable to load staff.')
     } finally {
@@ -68,7 +86,7 @@ export function StaffPage() {
       if (createValues.email.trim()) payload.email = createValues.email.trim()
       if (createValues.phone.trim()) payload.phone = createValues.phone.trim()
       await createStaff(payload)
-      setCreateSuccess('Staff account created successfully.')
+      setCreateSuccess('Staff account created. Share the temporary password privately with the staff member.')
       setCreateValues(emptyCreate)
       await load()
     } catch (createApiError) {
@@ -81,9 +99,44 @@ export function StaffPage() {
   const openDetails = async (member: StaffMember) => {
     setDetailError('')
     try {
-      setSelected(await getStaffMember(member.id))
+      const detail = await getStaffMember(member.id)
+      setSelected(detail)
+      setDepartmentDraft(detail.department ?? '')
+      setPasswordResetSuccess('')
     } catch (detailLoadError) {
       setDetailError(detailLoadError instanceof Error ? detailLoadError.message : 'Unable to load staff details.')
+    }
+  }
+
+  const saveDepartment = async () => {
+    if (!selected) return
+    setDetailError('')
+    try {
+      const updated = await updateStaff(selected.id, {
+        department: departmentDraft || null,
+      })
+      setSelected(updated)
+      await load()
+    } catch (updateError) {
+      setDetailError(updateError instanceof Error ? updateError.message : 'Unable to update department.')
+    }
+  }
+
+  const resetTemporaryPassword = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!selected || !temporaryPassword) return
+    setDetailError('')
+    setPasswordResetSuccess('')
+    setSavingPasswordReset(true)
+    try {
+      const updated = await updateStaff(selected.id, { temporary_password: temporaryPassword })
+      setSelected(updated)
+      setTemporaryPassword('')
+      setPasswordResetSuccess('Temporary password reset. Share it privately; it will not be shown again.')
+    } catch (resetError) {
+      setDetailError(resetError instanceof Error ? resetError.message : 'Unable to reset the password.')
+    } finally {
+      setSavingPasswordReset(false)
     }
   }
 
@@ -137,14 +190,21 @@ export function StaffPage() {
             </div>
             <div className="field-row field-row--split">
               <label>Username *<input value={createValues.username} onChange={(event) => setCreateValues({ ...createValues, username: event.target.value })} required /></label>
-              <label>Initial password *<input type="password" value={createValues.password} onChange={(event) => setCreateValues({ ...createValues, password: event.target.value })} required /></label>
+              <label>Temporary password *<input type="password" autoComplete="new-password" value={createValues.password} onChange={(event) => setCreateValues({ ...createValues, password: event.target.value })} required /></label>
             </div>
             <div className="field-row field-row--split">
               <label>Employee number *<input value={createValues.employee_number} onChange={(event) => setCreateValues({ ...createValues, employee_number: event.target.value })} required /></label>
               <label>Date joined *<input type="date" value={createValues.date_joined} onChange={(event) => setCreateValues({ ...createValues, date_joined: event.target.value })} required /></label>
             </div>
             <div className="field-row field-row--split">
-              <label>Department ID<input value={createValues.department} onChange={(event) => setCreateValues({ ...createValues, department: event.target.value })} /></label>
+              <label>Department
+                <select value={createValues.department} onChange={(event) => setCreateValues({ ...createValues, department: event.target.value })}>
+                  <option value="">No department</option>
+                  {departments.filter((department) => department.is_active).map((department) => (
+                    <option key={department.id} value={department.id}>{department.name}</option>
+                  ))}
+                </select>
+              </label>
               <label>Job title<input value={createValues.job_title} onChange={(event) => setCreateValues({ ...createValues, job_title: event.target.value })} /></label>
             </div>
             <div className="field-row field-row--split">
@@ -199,11 +259,41 @@ export function StaffPage() {
             <div><dt>Employee number</dt><dd>{selected.employee_number}</dd></div>
             <div><dt>Email</dt><dd>{selected.email || 'Not provided'}</dd></div>
             <div><dt>Phone</dt><dd>{selected.phone || 'Not provided'}</dd></div>
-            <div><dt>Department ID</dt><dd>{selected.department || 'Not assigned'}</dd></div>
+            <div><dt>Department</dt><dd>{departments.find((department) => department.id === selected.department)?.name || 'Not assigned'}</dd></div>
             <div><dt>Job title</dt><dd>{selected.job_title || 'Not provided'}</dd></div>
             <div><dt>Employment status</dt><dd>{selected.employment_status}</dd></div>
             <div><dt>Account status</dt><dd>{selected.is_active ? 'Active' : 'Inactive'}</dd></div>
           </dl>
+          <label>
+            Department
+            <select value={departmentDraft} onChange={(event) => setDepartmentDraft(event.target.value)}>
+              <option value="">No department</option>
+              {departments.filter((department) => department.is_active).map((department) => (
+                <option key={department.id} value={department.id}>{department.name}</option>
+              ))}
+            </select>
+          </label>
+          <button type="button" className="secondary-button" onClick={() => void saveDepartment()}>
+            Save department
+          </button>
+          <p className="ap-item__meta">
+            Password status: {selected.must_change_password ? 'Change required at next sign-in' : 'No change required'}
+          </p>
+          <form className="config-form" onSubmit={(event) => void resetTemporaryPassword(event)}>
+            <label>
+              Set a new temporary password
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={temporaryPassword}
+                onChange={(event) => setTemporaryPassword(event.target.value)}
+              />
+            </label>
+            {passwordResetSuccess && <div className="feedback feedback--success" role="status">{passwordResetSuccess}</div>}
+            <button type="submit" className="secondary-button" disabled={savingPasswordReset || !temporaryPassword}>
+              {savingPasswordReset ? 'Resetting…' : 'Reset temporary password'}
+            </button>
+          </form>
           <button type="button" className="secondary-button" onClick={() => void toggleActive()}>
             {selected.is_active ? 'Deactivate account' : 'Activate account'}
           </button>

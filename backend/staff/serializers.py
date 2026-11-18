@@ -6,7 +6,7 @@ from rest_framework import serializers
 from accounts.managers import normalize_username
 from accounts.models import User
 from devices.models import UserSession
-from devices.services import revoke_sessions
+from devices.services import record_audit, revoke_sessions
 from schools.models import Department
 
 from .models import StaffProfile
@@ -18,6 +18,9 @@ class StaffSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(source="user.email", read_only=True)
     phone = serializers.CharField(source="user.phone", read_only=True)
     is_active = serializers.BooleanField(source="user.is_active", read_only=True)
+    must_change_password = serializers.BooleanField(
+        source="user.must_change_password", read_only=True
+    )
     role = serializers.CharField(source="user.role", read_only=True)
     department = serializers.PrimaryKeyRelatedField(read_only=True)
 
@@ -31,6 +34,7 @@ class StaffSerializer(serializers.ModelSerializer):
             "phone",
             "role",
             "is_active",
+            "must_change_password",
             "employee_number",
             "first_name",
             "last_name",
@@ -73,7 +77,9 @@ class StaffCreateSerializer(SchoolScopedSerializer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         school = self.context["request"].user.school
-        self.fields["department"].queryset = Department.objects.filter(school=school)
+        self.fields["department"].queryset = Department.objects.filter(
+            school=school, is_active=True
+        )
 
     def validate(self, attrs):
         user = self.context["request"].user
@@ -111,6 +117,7 @@ class StaffCreateSerializer(SchoolScopedSerializer):
                 email=email,
                 phone=phone,
                 role=User.Role.STAFF,
+                must_change_password=True,
             )
             return StaffProfile.objects.create(
                 school=request_user.school,
@@ -135,11 +142,16 @@ class StaffUpdateSerializer(SchoolScopedSerializer):
     )
     date_joined = serializers.DateField(required=False)
     date_left = serializers.DateField(allow_null=True, required=False)
+    temporary_password = serializers.CharField(
+        write_only=True, trim_whitespace=False, required=False
+    )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         school = self.context["request"].user.school
-        self.fields["department"].queryset = Department.objects.filter(school=school)
+        self.fields["department"].queryset = Department.objects.filter(
+            school=school, is_active=True
+        )
 
     def validate(self, attrs):
         if "employee_number" in attrs and StaffProfile.objects.filter(
@@ -149,10 +161,18 @@ class StaffUpdateSerializer(SchoolScopedSerializer):
             raise serializers.ValidationError(
                 {"employee_number": "This employee number already exists in this school."}
             )
+        if "temporary_password" in attrs:
+            try:
+                validate_password(attrs["temporary_password"], user=self.instance.user)
+            except DjangoValidationError as error:
+                raise serializers.ValidationError(
+                    {"temporary_password": error.messages}
+                ) from error
         return attrs
 
     def update(self, instance, validated_data):
         user_fields = {"email", "phone", "is_active"}
+        temporary_password = validated_data.pop("temporary_password", None)
         user_updates = {
             field: validated_data.pop(field)
             for field in list(validated_data)
@@ -165,15 +185,30 @@ class StaffUpdateSerializer(SchoolScopedSerializer):
                 instance.save()
             for field, value in user_updates.items():
                 setattr(instance.user, field, value)
-            if user_updates:
+            if temporary_password is not None:
+                instance.user.set_password(temporary_password)
+                instance.user.must_change_password = True
+            if user_updates or temporary_password is not None:
                 deactivating = user_updates.get("is_active") is False
-                if deactivating:
+                if deactivating or temporary_password is not None:
                     revoke_sessions(
                         UserSession.objects.filter(user=instance.user),
                         actor=self.context["request"].user,
-                        reason="account_deactivated",
+                        reason=(
+                            "account_deactivated"
+                            if deactivating
+                            else "temporary_password_reset"
+                        ),
                     )
                 instance.user.save()
+                if temporary_password is not None:
+                    record_audit(
+                        school=instance.school,
+                        actor=self.context["request"].user,
+                        action="STAFF_TEMPORARY_PASSWORD_RESET",
+                        entity_type="User",
+                        entity_id=instance.user_id,
+                    )
         return instance
 
 

@@ -6,6 +6,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import User
+from audit.models import AuditLog
 from devices.models import UserSession
 from schools.models import Department, School
 from staff.models import StaffProfile
@@ -297,6 +298,7 @@ def test_school_admin_creates_staff_account_in_own_school():
     assert user.school_id == school.pk
     assert user.role == User.Role.STAFF
     assert user.is_staff is False
+    assert user.must_change_password is True
     assert user.check_password("Teacher-Account-Strong-91!")
     assert profile.school_id == school.pk
     assert profile.department_id == department.pk
@@ -371,6 +373,108 @@ def test_admin_can_update_staff_fields_and_deactivate_account():
     )
     assert client.delete(detail_url(profile)).status_code == 405
     assert StaffProfile.objects.filter(pk=profile.pk).exists()
+
+
+def test_temporary_password_requires_change_and_blocks_other_authenticated_routes():
+    school = make_school("NORTH")
+    admin = make_user(school, "admin", User.Role.SCHOOL_ADMIN)
+    admin.must_change_password = True
+    admin.save(update_fields=["must_change_password", "updated_at"])
+    client = APIClient()
+    tokens = login(client, school, admin.username).json()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access_token']}")
+
+    assert tokens["password_change_required"] is True
+    assert client.get(staff_url()).status_code == 403
+    assert (
+        client.post(
+            reverse("api:auth-refresh", kwargs={"version": "1"}),
+            {"refresh_token": tokens["refresh_token"]},
+            format="json",
+        ).status_code
+        == 401
+    )
+    changed = client.post(
+        reverse("api:auth-password-change", kwargs={"version": "1"}),
+        {
+            "current_password": "School-Strong-93!",
+            "new_password": "New-School-Password-93!",
+            "new_password_confirm": "New-School-Password-93!",
+        },
+        format="json",
+    )
+
+    assert changed.status_code == 200
+    assert changed.json()["password_change_required"] is False
+    admin.refresh_from_db()
+    assert admin.must_change_password is False
+    assert admin.check_password("New-School-Password-93!")
+    assert client.get(staff_url()).status_code == 200
+
+
+def test_staff_password_reset_revokes_sessions_and_sets_change_requirement():
+    school = make_school("NORTH")
+    admin = make_user(school, "admin", User.Role.SCHOOL_ADMIN)
+    staff_user, profile = make_staff(school, "teacher", "EMP-1")
+    old_tokens = login(APIClient(), school, staff_user.username).json()
+    client = APIClient()
+    client.force_authenticate(user=admin)
+
+    response = client.patch(
+        detail_url(profile),
+        {"temporary_password": "Reset-Teacher-Password-93!"},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    staff_user.refresh_from_db()
+    assert staff_user.must_change_password is True
+    assert staff_user.check_password("Reset-Teacher-Password-93!")
+    assert response.json()["must_change_password"] is True
+    assert UserSession.objects.get(user=staff_user).revoked_at is not None
+    assert APIClient().get(
+        staff_url(),
+        HTTP_AUTHORIZATION=f"Bearer {old_tokens['access_token']}",
+    ).status_code == 401
+    new_login = login(APIClient(), school, staff_user.username, "Reset-Teacher-Password-93!")
+    assert new_login.status_code == 200
+    assert new_login.json()["password_change_required"] is True
+    assert "Reset-Teacher-Password-93!" not in str(
+        AuditLog.objects.filter(action="STAFF_TEMPORARY_PASSWORD_RESET").values()
+    )
+
+
+def test_password_change_rejects_invalid_current_password_and_mismatch():
+    school = make_school("NORTH")
+    admin = make_user(school, "admin", User.Role.SCHOOL_ADMIN)
+    client = APIClient()
+    tokens = login(client, school, admin.username).json()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access_token']}")
+    url = reverse("api:auth-password-change", kwargs={"version": "1"})
+
+    invalid_current = client.post(
+        url,
+        {
+            "current_password": "wrong",
+            "new_password": "New-School-Password-93!",
+            "new_password_confirm": "New-School-Password-93!",
+        },
+        format="json",
+    )
+    mismatch = client.post(
+        url,
+        {
+            "current_password": "School-Strong-93!",
+            "new_password": "New-School-Password-93!",
+            "new_password_confirm": "Different-School-Password-93!",
+        },
+        format="json",
+    )
+
+    assert invalid_current.status_code == 400
+    assert mismatch.status_code == 400
+    admin.refresh_from_db()
+    assert admin.check_password("School-Strong-93!")
 
 
 def test_staff_apis_hide_other_schools_users_and_profiles():

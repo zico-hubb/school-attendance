@@ -14,11 +14,11 @@ describe('staff mobile application', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders the staff application without claiming unfinished features', () => {
+  it('renders the staff login application', () => {
     render(<App />)
 
     expect(screen.getByRole('heading', { name: 'School Attendance' })).toBeInTheDocument()
-    expect(screen.getByText(/sign-in and attendance workflows are not available yet/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument()
     expect(screen.getByTestId('platform-name')).toHaveTextContent('Platform: web')
     expect(screen.getByTestId('capability-status')).toHaveTextContent('Native verification: not available')
   })

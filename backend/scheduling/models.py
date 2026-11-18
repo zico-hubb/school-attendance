@@ -149,6 +149,7 @@ class ScheduleAssignment(SchoolOwnedModel):
         null=True,
         blank=True,
     )
+    is_school_default = models.BooleanField(default=False)
     effective_from = models.DateField()
     effective_to = models.DateField(null=True, blank=True)
     assigned_by = models.ForeignKey(
@@ -162,8 +163,21 @@ class ScheduleAssignment(SchoolOwnedModel):
         constraints = [
             models.CheckConstraint(
                 condition=(
-                    models.Q(department__isnull=False, staff_profile__isnull=True)
-                    | models.Q(department__isnull=True, staff_profile__isnull=False)
+                    models.Q(
+                        is_school_default=True,
+                        department__isnull=True,
+                        staff_profile__isnull=True,
+                    )
+                    | models.Q(
+                        is_school_default=False,
+                        department__isnull=False,
+                        staff_profile__isnull=True,
+                    )
+                    | models.Q(
+                        is_school_default=False,
+                        department__isnull=True,
+                        staff_profile__isnull=False,
+                    )
                 ),
                 name="schedule_assignment_one_target",
             )
@@ -180,12 +194,35 @@ class ScheduleAssignment(SchoolOwnedModel):
             validate_same_school(self, self.staff_profile)
         if self.assigned_by_id and self.assigned_by.school_id != self.school_id:
             raise ValidationError({"assigned_by": "The assigner must belong to this school."})
-        if bool(self.department_id) == bool(self.staff_profile_id):
+        if self.is_school_default:
+            if self.department_id or self.staff_profile_id:
+                raise ValidationError(
+                    "A school-default assignment cannot target a department or staff member."
+                )
+            target_field = None
+            target_id = None
+        elif bool(self.department_id) == bool(self.staff_profile_id):
             raise ValidationError(
                 "Exactly one of department or staff_profile must be set."
             )
-        target_field = "department" if self.department_id else "staff_profile"
-        target_id = self.department_id or self.staff_profile_id
+        else:
+            target_field = "department" if self.department_id else "staff_profile"
+            target_id = self.department_id or self.staff_profile_id
+        if self.is_school_default and self.effective_from:
+            overlap = type(self).objects.filter(
+                school_id=self.school_id,
+                is_school_default=True,
+                effective_from__lte=self.effective_to or date.max,
+            ).filter(
+                models.Q(effective_to__isnull=True)
+                | models.Q(effective_to__gte=self.effective_from)
+            )
+            if self.pk:
+                overlap = overlap.exclude(pk=self.pk)
+            if overlap.exists():
+                raise ValidationError(
+                    {"effective_from": "School-default assignments cannot overlap."}
+                )
         if target_id and self.effective_from:
             overlap = type(self).objects.filter(
                 **{
@@ -215,6 +252,8 @@ class ScheduleAssignment(SchoolOwnedModel):
                 type(self.staff_profile).objects.select_for_update().get(
                     pk=self.staff_profile_id
                 )
+            elif self.is_school_default:
+                type(self.school).objects.select_for_update().get(pk=self.school_id)
             return super().save(*args, **kwargs)
 
 
@@ -227,6 +266,7 @@ class ScheduleException(SchoolOwnedModel):
     start_time = models.TimeField(null=True, blank=True)
     end_time = models.TimeField(null=True, blank=True)
     late_after = models.TimeField(null=True, blank=True)
+    absence_finalization_time = models.TimeField(null=True, blank=True)
     reason = models.CharField(max_length=255, blank=True)
     created_by = models.ForeignKey(
         "accounts.User",
@@ -257,3 +297,15 @@ class ScheduleException(SchoolOwnedModel):
             validate_same_school(self, self.staff_profile)
         if self.created_by_id and self.created_by.school_id != self.school_id:
             raise ValidationError({"created_by": "The creator must belong to this school."})
+        if not self.is_working_day and any(
+            value is not None
+            for value in (
+                self.start_time,
+                self.end_time,
+                self.late_after,
+                self.absence_finalization_time,
+            )
+        ):
+            raise ValidationError(
+                "A non-working exception cannot define attendance times."
+            )

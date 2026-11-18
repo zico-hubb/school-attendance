@@ -51,3 +51,6 @@ mobile/ios/*.xcodeproj/xcuserdata/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local database backups
+/backups/

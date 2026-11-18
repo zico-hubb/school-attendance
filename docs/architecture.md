@@ -16,11 +16,15 @@ and use pytest-django's `--reuse-db` option.
 ## Current scope
 
 The API exposes a public health check, school-code authentication with signed
-access and rotating refresh tokens, school-admin staff identity management,
-and school-scoped attendance-zone and approved-Wi-Fi access-point
-configuration. Public registration, attendance verification and
-classification, native integrations, and dashboard/mobile workflows are not
-implemented. No Azure resources or deployment configuration are provisioned.
+access and rotating refresh tokens, temporary-password change/reset, school-
+scoped department and staff identity management, and school-scoped attendance-
+zone and approved-Wi-Fi access-point configuration. Versioned work schedules,
+school-default/department/staff assignments, date exceptions, school calendar
+events, leave types, and audited leave request transitions are implemented.
+The dashboard connects staff, department, device, location, scheduling, and
+leave administration flows. Public registration, attendance verification and
+classification, native integrations, and reporting are not implemented. No
+Azure resources or deployment configuration are provisioned.
 
 ## Platform school provisioning
 
@@ -51,9 +55,12 @@ Deliver the initial password to the administrator only through an approved,
 secure out-of-band channel. Do not put it in command arguments, shell history,
 logs, tickets, or chat. The administrator signs in through the existing
 `/api/v1/auth/login/` endpoint using the provisioned school code, username, and
-password. The application currently has no forced password-change or
-self-service password-reset workflow, so the operator and administrator must
-follow the deployment's credential-rotation procedure after handoff.
+password. Staff accounts created by an administrator must change their
+temporary password at first authenticated use. An administrator can issue a
+replacement temporary password, which revokes the staff member's sessions.
+The application has no verified-email channel for self-service recovery;
+temporary passwords must be delivered through an approved secure out-of-band
+channel and are never returned by the API.
 
 ## School location and network configuration
 
@@ -79,6 +86,35 @@ collect GPS positions or verify attendance. GPS may be inaccurate or
 manipulated, and BSSIDs can be spoofed; neither is secure proof of physical
 presence or device identity. A future attendance engine must treat them only
 as corroborating signals.
+
+## Scheduling, school calendar, and leave
+
+Work schedules contain effective-dated versions with one entry for each
+weekday. Working days require start, late-after, and absence-finalization
+times. Schedule assignments resolve from staff to department to school
+default; a date-specific staff exception takes precedence. Holiday/closure
+calendar events make matching dates non-working, while an exceptional working
+day includes its own attendance times. Department calendar events take
+precedence over school-wide events. Overlapping assignments within a target
+scope and overlapping calendar events within the same scope are rejected.
+Schedule and calendar history is retained; assignments can be ended by setting
+their effective end date rather than deleting them.
+
+School administrators manage schedules, assignments, exceptions, calendar
+events, and leave types. Attendance managers may read the relevant
+configuration but cannot mutate it. Staff can read active leave types, submit
+and view their own leave requests, and cancel a pending request. Only a school
+administrator can approve or reject pending requests or cancel pending or
+approved leave. Approved leave periods cannot overlap for one staff member.
+All schedule, calendar, and leave mutations write an audit entry in the same
+transaction. The staff mobile leave interface and attendance classification
+that consumes schedules, calendar events, and approved leave remain future
+work.
+
+The schedule-default field, date-exception absence deadline, calendar
+exceptional-day times, and leave review/cancellation metadata use additive
+migrations. These migrations have been generated but have not been applied to
+the local database.
 
 ## Device enrollment and sessions
 

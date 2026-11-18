@@ -24,6 +24,8 @@ from .models import (
 CHALLENGE_TTL = timedelta(minutes=5)
 ENROLLMENT_PURPOSE = "DEVICE_ENROLLMENT"
 DEVICE_AUTHENTICATION_PURPOSE = "DEVICE_AUTHENTICATION"
+ATTENDANCE_CHECK_IN_PURPOSE = "ATTENDANCE_CHECK_IN"
+ATTENDANCE_CHECK_OUT_PURPOSE = "ATTENDANCE_CHECK_OUT"
 SIGNATURE_ALGORITHM = "ECDSA_P256_SHA256"
 
 
@@ -96,6 +98,14 @@ def device_authentication_message(challenge, user, device):
     return (
         "school-attendance:device-authentication:v1\n"
         f"{challenge}\n{user.pk}\n{device.school_id}\n{device.pk}"
+    ).encode("utf-8")
+
+
+def device_attendance_message(challenge, user, device, attempt_type):
+    purpose = "check-in" if attempt_type == "CHECK_IN" else "check-out"
+    return (
+        "school-attendance:attendance:v1\n"
+        f"{purpose}\n{challenge}\n{user.pk}\n{device.school_id}\n{device.pk}"
     ).encode("utf-8")
 
 

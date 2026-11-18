@@ -1,6 +1,11 @@
 # School Attendance Management
 
-Initial monorepo foundation for a multi-tenant school attendance SaaS for Kenyan schools. It contains a Django REST API, a React administration dashboard, and one shared React/Capacitor staff application. The Django database model foundation, school-code authentication APIs, and school-admin staff identity APIs are in place; attendance workflows and native verification are not implemented.
+Initial monorepo foundation for a multi-tenant school attendance SaaS for
+Kenyan schools. It contains a Django REST API, a React administration
+dashboard, and one shared React/Capacitor staff application. School-code
+authentication, school-scoped department and staff identity APIs, device
+management, location configuration, scheduling, and leave administration are
+implemented; attendance workflows and native verification are not.
 
 ## Architecture and structure
 
@@ -65,7 +70,11 @@ The V1 Django models are divided across the `schools`, `accounts`, `staff`,
 `devices`, `locations`, `scheduling`, `leave_management`, `attendance`, and `audit`
 apps. Their initial migrations have been applied to local PostgreSQL 18. See
 [docs/database-design.md](docs/database-design.md) for tenant-integrity and
-validation details.
+validation details. Additive migrations for temporary-password state,
+school-default schedules, schedule exceptions, exceptional calendar working
+times, and leave workflow metadata have been generated but not applied during
+this implementation. Apply pending migrations only after confirming the
+target database and maintenance window.
 
 ## Dashboard and staff app
 
@@ -133,9 +142,10 @@ the local session.
 
 ## Limitations
 
-- The versioned API has health, authentication, and school-admin staff identity
-  endpoints. Public registration, attendance workflows/classification, and
-  administrator attendance corrections are not implemented.
+-   The versioned API has health, authentication, department and staff identity,
+  device lifecycle, location configuration, schedule/calendar, and leave
+  endpoints. Public registration, attendance workflows/classification,
+  administrator attendance corrections, and reporting are not implemented.
 - Native Wi-Fi, GPS, device identity, biometrics, and platform plugins are unavailable.
 - Android SDK tooling is required for Android project continuation/builds; Xcode and macOS are required for iOS project/build/signing.
 - Azure deployment remains unprovisioned.

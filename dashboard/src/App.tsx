@@ -1,9 +1,13 @@
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
 import { Circle, CircleMarker, MapContainer, Popup, TileLayer, useMapEvents } from 'react-leaflet'
-import { getHealth, getAttendanceZones, createAttendanceZone, patchAttendanceZone, getAccessPoints, createAccessPoint, patchAccessPoint } from './services/api'
+import { getHealth, getAttendanceZones, createAttendanceZone, patchAttendanceZone, getAccessPoints, createAccessPoint, patchAccessPoint, getAttendanceRegister, getOverview, getAttendanceReport, getAuditLogs, getSchoolSettings, patchSchoolSettings, type AttendanceRegisterRow, type Overview, type AttendanceReport, type AuditLogResponse, type SchoolSettings } from './services/api'
 import { AuthProvider, useAuth } from './services/auth'
 import { StaffPage } from './pages/StaffPage'
+import { DepartmentPage } from './pages/DepartmentPage'
+import { DevicePage } from './pages/DevicePage'
+import { SchedulePage } from './pages/SchedulePage'
+import { LeavePage } from './pages/LeavePage'
 import 'leaflet/dist/leaflet.css'
 import './App.css'
 
@@ -27,6 +31,8 @@ type AccessPoint = {
 
 function DashboardHome() {
   const [connection, setConnection] = useState<'checking' | 'connected' | 'unavailable'>('checking')
+  const [overview, setOverview] = useState<Overview | null>(null)
+  const [overviewError, setOverviewError] = useState('')
 
   useEffect(() => {
     let active = true
@@ -37,6 +43,9 @@ function DashboardHome() {
       .catch(() => {
         if (active) setConnection('unavailable')
       })
+    getOverview()
+      .then((data) => { if (active) setOverview(data) })
+      .catch((caught) => { if (active) setOverviewError(caught instanceof Error ? caught.message : 'Unable to load overview.') })
     return () => {
       active = false
     }
@@ -47,8 +56,7 @@ function DashboardHome() {
       <p className="eyebrow">School Attendance</p>
       <h1>Administration</h1>
       <p className="intro">
-        The administration workspace is ready. School data and management tools will appear here
-        as they are implemented.
+        Operational summary for {overview?.school.name ?? 'your school'}.
       </p>
       <section className="connection" aria-live="polite">
         <span className={`connection-indicator connection-indicator--${connection}`} />
@@ -62,6 +70,19 @@ function DashboardHome() {
           </p>
         </div>
       </section>
+      {overviewError && <p role="alert" className="error-message">{overviewError}</p>}
+      {overview && (
+        <section className="stat-grid" aria-label="School overview">
+          <article><strong>{overview.staff.total}</strong><span>Active staff</span></article>
+          <article><strong>{overview.attendance.present ?? 0}</strong><span>Present today</span></article>
+          <article><strong>{overview.attendance.late ?? 0}</strong><span>Late today</span></article>
+          <article><strong>{overview.attendance.absent ?? 0}</strong><span>Absent today</span></article>
+          <article><strong>{overview.attendance.on_leave ?? 0}</strong><span>On leave today</span></article>
+          <article><strong>{overview.devices.pending}</strong><span>Pending devices</span></article>
+          <article><strong>{overview.devices.active}</strong><span>Active devices</span></article>
+          <article><strong>{overview.leave.pending}</strong><span>Pending leave requests</span></article>
+        </section>
+      )}
       <nav className="quick-links" aria-label="Quick navigation">
         <Link to="/network-settings">Network &amp; Location Settings</Link>
       </nav>
@@ -842,12 +863,241 @@ function ProtectedRoute({ children, adminOnly = false }: { children: React.React
   return <>{children}</>
 }
 
-function FutureModule({ title }: { title: string }) {
+function AttendanceRegisterPage() {
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [rows, setRows] = useState<AttendanceRegisterRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    setError('')
+    getAttendanceRegister(date)
+      .then((next) => { if (active) setRows(next) })
+      .catch((caught) => { if (active) setError(caught instanceof Error ? caught.message : 'Unable to load attendance.') })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [date])
+
   return (
     <main className="dashboard-card">
-      <p className="eyebrow">Future milestone</p>
-      <h1>{title}</h1>
-      <p className="intro">This module is awaiting the corresponding backend milestone.</p>
+      <p className="eyebrow">Read-only attendance</p>
+      <h1>Attendance Register</h1>
+      <label>Date <input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label>
+      {loading && <p role="status">Loading attendance...</p>}
+      {error && <p role="alert" className="error-message">{error}</p>}
+      {!loading && !error && (
+        rows.length === 0 ? <p>No staff or attendance records for this date.</p> : (
+          <div className="table-scroll">
+            <table>
+              <thead><tr><th>Staff</th><th>Department</th><th>Status</th><th>Check-in</th><th>Check-out</th></tr></thead>
+              <tbody>{rows.map((row) => (
+                <tr key={row.staff_id}>
+                  <td>{row.staff_name} ({row.employee_number})</td>
+                  <td>{row.department ?? 'Unassigned'}</td>
+                  <td>{row.status}</td>
+                  <td>{row.check_in ? new Date(row.check_in).toLocaleTimeString() : '-'}</td>
+                  <td>{row.check_out ? new Date(row.check_out).toLocaleTimeString() : '-'}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )
+      )}
+    </main>
+  )
+}
+
+function ReportsPage() {
+  const [dateFrom, setDateFrom] = useState(() => new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10))
+  const [dateTo, setDateTo] = useState(() => new Date().toISOString().slice(0, 10))
+  const [report, setReport] = useState<AttendanceReport | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    getAttendanceReport(dateFrom, dateTo)
+      .then((next) => { if (active) setReport(next); setError('') })
+      .catch((caught) => { if (active) setError(caught instanceof Error ? caught.message : 'Unable to load report.') })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [dateFrom, dateTo])
+
+  function exportCsv() {
+    if (!report) return
+    const headers = ['Employee number', 'First name', 'Last name', 'Department', 'Records', 'Present', 'Late', 'Absent', 'On leave', 'Incomplete']
+    const rows = report.by_staff.map((row) => [
+      row.staff_profile__employee_number,
+      row.staff_profile__first_name,
+      row.staff_profile__last_name,
+      row.staff_profile__department__name ?? '',
+      row.records,
+      row.present,
+      row.late,
+      row.absent,
+      row.on_leave,
+      row.incomplete,
+    ])
+    const csv = [headers, ...rows].map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(',')).join('\n')
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `attendance-${dateFrom}-to-${dateTo}.csv`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <main className="dashboard-card">
+      <p className="eyebrow">Stored attendance data</p>
+      <h1>Reports</h1>
+      <div className="filter-row">
+        <label>From <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label>
+        <label>To <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label>
+        <button type="button" disabled={!report} onClick={exportCsv}>Export CSV</button>
+      </div>
+      {loading && <p role="status">Loading report...</p>}
+      {error && <p role="alert" className="error-message">{error}</p>}
+      {report && !loading && (
+        <>
+          <div className="stat-grid">
+            {report.summary.map((item) => <article key={item.status}><strong>{item.count}</strong><span>{item.status}</span></article>)}
+          </div>
+          {report.by_staff.length === 0 ? <p>No attendance records in this date range.</p> : (
+            <div className="table-scroll">
+              <table>
+                <thead><tr><th>Staff</th><th>Department</th><th>Records</th><th>Present</th><th>Late</th><th>Absent</th><th>Leave</th><th>Incomplete</th></tr></thead>
+                <tbody>{report.by_staff.map((row) => (
+                  <tr key={row.staff_profile__employee_number}>
+                    <td>{row.staff_profile__first_name} {row.staff_profile__last_name} ({row.staff_profile__employee_number})</td>
+                    <td>{row.staff_profile__department__name ?? 'Unassigned'}</td>
+                    <td>{row.records}</td><td>{row.present}</td><td>{row.late}</td><td>{row.absent}</td><td>{row.on_leave}</td><td>{row.incomplete}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </main>
+  )
+}
+
+function AuditLogsPage() {
+  const [page, setPage] = useState(1)
+  const [search, setSearch] = useState('')
+  const [action, setAction] = useState('')
+  const [logs, setLogs] = useState<AuditLogResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    getAuditLogs({ page, pageSize: 25, search, action })
+      .then((next) => { if (active) { setLogs(next); setError('') } })
+      .catch((caught) => { if (active) setError(caught instanceof Error ? caught.message : 'Unable to load audit logs.') })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [page, search, action])
+
+  return (
+    <main className="dashboard-card">
+      <p className="eyebrow">Append-only history</p>
+      <h1>Audit Logs</h1>
+      <div className="filter-row">
+        <label>Search <input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} /></label>
+        <label>Action <input value={action} onChange={(event) => { setAction(event.target.value); setPage(1) }} /></label>
+      </div>
+      {loading && <p role="status">Loading audit history...</p>}
+      {error && <p role="alert" className="error-message">{error}</p>}
+      {logs && !loading && (
+        <>
+          {logs.results.length === 0 ? <p>No audit entries match the filters.</p> : (
+            <div className="table-scroll">
+              <table>
+                <thead><tr><th>Time</th><th>Action</th><th>Entity</th><th>Actor</th><th>Reason</th></tr></thead>
+                <tbody>{logs.results.map((log) => (
+                  <tr key={log.id}>
+                    <td>{new Date(log.created_at).toLocaleString()}</td>
+                    <td>{log.action}</td>
+                    <td>{log.entity_type} ({log.entity_id})</td>
+                    <td>{log.actor_user_id ?? 'Operator / system'}</td>
+                    <td>{log.reason || '-'}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          )}
+          <div className="pagination">
+            <button type="button" disabled={page <= 1} onClick={() => setPage(page - 1)}>Previous</button>
+            <span>Page {logs.page} of {Math.max(logs.total_pages, 1)}</span>
+            <button type="button" disabled={page >= logs.total_pages} onClick={() => setPage(page + 1)}>Next</button>
+          </div>
+        </>
+      )}
+    </main>
+  )
+}
+
+function SchoolSettingsPage() {
+  const [settings, setSettings] = useState<SchoolSettings | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+
+  useEffect(() => {
+    let active = true
+    getSchoolSettings()
+      .then((next) => { if (active) setSettings(next) })
+      .catch((caught) => { if (active) setError(caught instanceof Error ? caught.message : 'Unable to load school settings.') })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [])
+
+  async function save(event: React.FormEvent) {
+    event.preventDefault()
+    if (!settings) return
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      const next = await patchSchoolSettings({
+        name: settings.name,
+        email: settings.email,
+        phone: settings.phone,
+        address: settings.address,
+        timezone: settings.timezone,
+      })
+      setSettings(next)
+      setSuccess('School settings saved.')
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Unable to save school settings.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) return <main className="dashboard-card"><p role="status">Loading school settings...</p></main>
+  if (!settings) return <main className="dashboard-card"><p role="alert" className="error-message">{error || 'Settings unavailable.'}</p></main>
+  return (
+    <main className="dashboard-card">
+      <p className="eyebrow">School configuration</p>
+      <h1>School Settings</h1>
+      <p>School code: <strong>{settings.school_code}</strong></p>
+      <p>Status: <strong>{settings.status}</strong></p>
+      <form onSubmit={save}>
+        <label>School name <input value={settings.name} onChange={(event) => setSettings({ ...settings, name: event.target.value })} required /></label>
+        <label>Email <input type="email" value={settings.email} onChange={(event) => setSettings({ ...settings, email: event.target.value })} /></label>
+        <label>Phone <input value={settings.phone} onChange={(event) => setSettings({ ...settings, phone: event.target.value })} /></label>
+        <label>Address <textarea value={settings.address} onChange={(event) => setSettings({ ...settings, address: event.target.value })} /></label>
+        <label>Timezone <input value={settings.timezone} onChange={(event) => setSettings({ ...settings, timezone: event.target.value })} required /></label>
+        {error && <p role="alert" className="error-message">{error}</p>}
+        {success && <p aria-live="polite">{success}</p>}
+        <button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save settings'}</button>
+      </form>
     </main>
   )
 }
@@ -862,10 +1112,11 @@ function AdministrationShell() {
     { path: '/', label: 'Overview', show: true },
     { path: '/attendance', label: 'Attendance Register', show: true },
     { path: '/staff', label: 'Staff Management', show: user.role === 'SCHOOL_ADMIN' },
+    { path: '/departments', label: 'Departments', show: true },
     { path: '/devices', label: 'Device Management', show: user.role === 'SCHOOL_ADMIN' },
     { path: '/network-settings', label: 'Network & Location Settings', show: true },
-    { path: '/schedules', label: 'Schedules', show: user.role === 'SCHOOL_ADMIN' },
-    { path: '/leave', label: 'Leave Management', show: user.role === 'SCHOOL_ADMIN' },
+    { path: '/schedules', label: 'Schedules', show: true },
+    { path: '/leave', label: 'Leave Management', show: true },
     { path: '/reports', label: 'Reports', show: user.role === 'SCHOOL_ADMIN' },
     { path: '/audit', label: 'Audit Logs', show: user.role === 'SCHOOL_ADMIN' },
     { path: '/school-settings', label: 'School Settings', show: user.role === 'SCHOOL_ADMIN' },
@@ -899,14 +1150,15 @@ function AdministrationShell() {
         <Routes>
           <Route path="/" element={<ProtectedRoute><DashboardHome /></ProtectedRoute>} />
           <Route path="/staff" element={<ProtectedRoute adminOnly><StaffPage /></ProtectedRoute>} />
+          <Route path="/departments" element={<ProtectedRoute><DepartmentPage /></ProtectedRoute>} />
           <Route path="/network-settings" element={<ProtectedRoute><NetworkSettingsPage /></ProtectedRoute>} />
-          <Route path="/attendance" element={<ProtectedRoute><FutureModule title="Attendance Register" /></ProtectedRoute>} />
-          <Route path="/devices" element={<ProtectedRoute adminOnly><FutureModule title="Device Management" /></ProtectedRoute>} />
-          <Route path="/schedules" element={<ProtectedRoute adminOnly><FutureModule title="Schedules" /></ProtectedRoute>} />
-          <Route path="/leave" element={<ProtectedRoute adminOnly><FutureModule title="Leave Management" /></ProtectedRoute>} />
-          <Route path="/reports" element={<ProtectedRoute adminOnly><FutureModule title="Reports" /></ProtectedRoute>} />
-          <Route path="/audit" element={<ProtectedRoute adminOnly><FutureModule title="Audit Logs" /></ProtectedRoute>} />
-          <Route path="/school-settings" element={<ProtectedRoute adminOnly><FutureModule title="School Settings" /></ProtectedRoute>} />
+          <Route path="/attendance" element={<ProtectedRoute><AttendanceRegisterPage /></ProtectedRoute>} />
+          <Route path="/devices" element={<ProtectedRoute adminOnly><DevicePage /></ProtectedRoute>} />
+          <Route path="/schedules" element={<ProtectedRoute><SchedulePage /></ProtectedRoute>} />
+          <Route path="/leave" element={<ProtectedRoute><LeavePage /></ProtectedRoute>} />
+          <Route path="/reports" element={<ProtectedRoute adminOnly><ReportsPage /></ProtectedRoute>} />
+          <Route path="/audit" element={<ProtectedRoute adminOnly><AuditLogsPage /></ProtectedRoute>} />
+          <Route path="/school-settings" element={<ProtectedRoute adminOnly><SchoolSettingsPage /></ProtectedRoute>} />
           <Route path="*" element={<ProtectedRoute><NotFound /></ProtectedRoute>} />
         </Routes>
       </div>

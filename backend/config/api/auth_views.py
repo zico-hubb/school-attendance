@@ -1,16 +1,20 @@
 from django.conf import settings
 from django.contrib.auth import authenticate
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers, status
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.managers import normalize_username
 from accounts.models import User
+from accounts.permissions import IsAuthenticated
 from accounts.tokens import create_session, issue_access_token, rotate_refresh_token
-from devices.services import device_status_for_user, record_audit
+from devices.models import UserSession
+from devices.services import device_status_for_user, record_audit, revoke_sessions
 
 
 INVALID_CREDENTIALS = "Invalid school code, username, or password."
@@ -38,6 +42,27 @@ class RefreshSerializer(StrictInputSerializer):
     refresh_token = serializers.CharField(trim_whitespace=False, write_only=True)
 
 
+class PasswordChangeSerializer(StrictInputSerializer):
+    current_password = serializers.CharField(trim_whitespace=False, write_only=True)
+    new_password = serializers.CharField(trim_whitespace=False, write_only=True)
+    new_password_confirm = serializers.CharField(
+        trim_whitespace=False, write_only=True
+    )
+
+    def validate(self, attrs):
+        if attrs["new_password"] != attrs["new_password_confirm"]:
+            raise serializers.ValidationError(
+                {"new_password_confirm": "The new passwords do not match."}
+            )
+        try:
+            validate_password(attrs["new_password"], user=self.context["request"].user)
+        except DjangoValidationError as error:
+            raise serializers.ValidationError(
+                {"new_password": error.messages}
+            ) from error
+        return attrs
+
+
 def token_response(session, refresh_token):
     return {
         "access_token": issue_access_token(session),
@@ -46,6 +71,7 @@ def token_response(session, refresh_token):
         "expires_in": settings.ACCESS_TOKEN_TTL_SECONDS,
         "refresh_expires_at": session.expires_at.isoformat(),
         "device_status": device_status_for_user(session.user),
+        "password_change_required": session.user.must_change_password,
         "session_status": (
             "DEVICE_BOUND"
             if session.device_id
@@ -126,6 +152,7 @@ class RefreshView(APIView):
 
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
+    allow_password_change = True
 
     def post(self, request, version):
         with transaction.atomic():
@@ -144,3 +171,46 @@ class LogoutView(APIView):
                 },
             )
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PasswordChangeView(APIView):
+    permission_classes = [IsAuthenticated]
+    allow_password_change = True
+
+    def post(self, request, version):
+        serializer = PasswordChangeSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        values = serializer.validated_data
+        if not request.user.check_password(values["current_password"]):
+            return Response(
+                {"detail": "The current password is incorrect."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            user = User.objects.select_for_update().get(pk=request.user.pk)
+            if not user.check_password(values["current_password"]):
+                return Response(
+                    {"detail": "The current password is incorrect."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            user.set_password(values["new_password"])
+            user.must_change_password = False
+            user.save(update_fields=["password", "must_change_password", "updated_at"])
+            revoke_sessions(
+                UserSession.objects.filter(user=user).exclude(pk=request.auth.pk),
+                actor=user,
+                reason="password_changed",
+            )
+            record_audit(
+                school=user.school,
+                actor=user,
+                action="PASSWORD_CHANGED",
+                entity_type="User",
+                entity_id=user.pk,
+            )
+        return Response(
+            {"detail": "Password changed successfully.", "password_change_required": False}
+        )

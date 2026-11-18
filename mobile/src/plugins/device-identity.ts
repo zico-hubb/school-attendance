@@ -1,3 +1,5 @@
+import { registerPlugin } from '@capacitor/core'
+
 export type PublicKeyRegistration = {
   keyId: string
   publicKey: string
@@ -13,14 +15,25 @@ export interface DeviceIdentityPlugin {
   signChallenge(challenge: string): Promise<DeviceIdentityResult<{ signature: string }>>
 }
 
+const nativePlugin = registerPlugin<DeviceIdentityPlugin>('SchoolAttendanceDeviceIdentity')
 const unsupportedReason =
-  'Hardware-backed device identity is not implemented; no browser cryptography is used as a substitute.'
+  'Native device identity is unavailable in browser development.'
 
 export const deviceIdentityPlugin: DeviceIdentityPlugin = {
   async registerPublicKey() {
+    if (nativePlugin.registerPublicKey) {
+      try { return await nativePlugin.registerPublicKey() } catch (error) {
+        return { available: false, reason: error instanceof Error ? error.message : 'Device key generation failed.' }
+      }
+    }
     return { available: false, reason: unsupportedReason }
   },
-  async signChallenge() {
+  async signChallenge(challenge: string) {
+    if (nativePlugin.signChallenge) {
+      try { return await nativePlugin.signChallenge({ challenge } as never) } catch (error) {
+        return { available: false, reason: error instanceof Error ? error.message : 'Challenge signing failed.' }
+      }
+    }
     return { available: false, reason: unsupportedReason }
   },
 }
